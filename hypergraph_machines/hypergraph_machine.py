@@ -4,7 +4,6 @@ import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 from collections import Counter
-from matplotlib.lines import Line2D
 from hypergraph_machines.utils import Space, Morphism, Conv2d_pad
 from hypergraph_machines.utils import reg_loss, ACTIVATIONS, EQUIVARIANCES
 from hypergraph_machines.utils import BestModelSaver, generate_timestamp
@@ -204,37 +203,3 @@ class HypergraphMachine(nn.Module):
         s1 = [s for s in self.spaces if s.index == index]
         s2 = [s for s in self.output_spaces if s.index == index]
         return (s1+s2)[0]
-
-
-if __name__ == "__main__":
-    import torch.nn.functional as F
-    from torchvision import datasets, transforms
-    from torch.optim.lr_scheduler import StepLR
-    import numpy as np
-    from hypergraph_machines.utils import train, test
-    from hypergraph_machines.dataset_loader import load_dataset
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    sns.set(context="paper", style="white")
-    plt.ion()
-
-    device = torch.device("cuda")
-    timestamp = generate_timestamp()
-    batch_size, num_epochs = 128, 100
-    train_loader, test_loader, image_size = load_dataset("MNIST", batch_size,
-                                                         data_folder = "../data")
-    model = HypergraphMachine((1,28,28), 20, number_of_classes = 10, tol = 1e-6,
-                              limit_image_upsample = 2, prune=True).to(device)
-    optimizer = torch.optim.SGD(model.parameters(), lr= 3e-3)
-    saver = BestModelSaver('./checkpoints' + timestamp)
-
-    for epoch in range(1, num_epochs + 1):
-        print("starting epoch {} of {}".format(epoch, num_epochs))
-        train(model, device, train_loader, optimizer, epoch,
-              loss_func = reg_loss, loss_inputs = [model, F.nll_loss, 1])
-        loss, acc = test(model, device, test_loader)
-        saver.save(model, optimizer, epoch, loss, acc)
-        if epoch % 10 == 1:
-            f,ax = plt.subplots()
-            visualise_graph(model, ax=ax)
-            f.suptitle("epoch {}".format(epoch))
