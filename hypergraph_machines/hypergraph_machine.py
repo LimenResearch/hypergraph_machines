@@ -1,12 +1,9 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
 import numpy as np
-import networkx as nx
-import matplotlib.pyplot as plt
-from collections import Counter
 from hypergraph_machines.utils import Space, Morphism, Conv2d_pad
-from hypergraph_machines.utils import reg_loss, ACTIVATIONS, EQUIVARIANCES
-from hypergraph_machines.utils import BestModelSaver, generate_timestamp
+from hypergraph_machines.utils import ACTIVATIONS, EQUIVARIANCES
 from hypergraph_machines.utils import get_graph, visualise_graph
 EQUIVARIANCES = ["translations"]
 
