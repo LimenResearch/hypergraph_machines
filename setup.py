@@ -20,42 +20,34 @@
 #
 # [1]
 
-import os
 import sys
-from distutils.sysconfig import get_python_lib
 from setuptools import find_packages, setup
-import subprocess
+import pathlib
 
-CURRENT_PYTHON = sys.version_info[:2]
-REQUIRED_PYTHON = (3, 6)
-if CURRENT_PYTHON < REQUIRED_PYTHON:
+CURRENT_PYTHON_VERSION = sys.version_info[:2]
+MIN_REQUIRED_PYTHON_VERSION = (3, 10) # COMPATIBLE PYTHON VERSION
+if CURRENT_PYTHON_VERSION < MIN_REQUIRED_PYTHON_VERSION:
     sys.stderr.write("""
 ==========================
 Unsupported Python version
 ==========================
 This version of hypergraph_machines requires Python {}.{}, but you're trying to
 install it on Python {}.{}.
-""".format(*(REQUIRED_PYTHON + CURRENT_PYTHON)))
+""".format(*(MIN_REQUIRED_PYTHON_VERSION + CURRENT_PYTHON_VERSION)))
     sys.exit(1)
 
-requirements = ['torch>=1.1.0',
-                'torchvision>=0.3.0',
-                'numpy>=1.15.0',
-                'networkx>=2.4',
-                'seaborn>=0.9.0',
-                'matplotlib>=2.2.2'
-                ]
+requirements = (pathlib.Path(__file__).parent / "requirements.txt").read_text().splitlines()
 EXCLUDE_FROM_PACKAGES = []
 
 setup(
     name='hypergraph_machines',
-    version='0.0.0-prealpha',
-    python_requires='>={}.{}'.format(*REQUIRED_PYTHON),
+    version='0.0.1',
+    python_requires='>={}.{}'.format(*MIN_REQUIRED_PYTHON_VERSION),
     url='',
     author='',
     author_email='',
     description=(''),
-    license='GNU General Public License v3 or later (GPLv3+)',
+    license='',
     packages=find_packages(exclude=EXCLUDE_FROM_PACKAGES),
     include_package_data=True,
     install_requires=requirements,
@@ -70,7 +62,7 @@ setup(
         'Operating System :: OS Independent',
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.10',
         'Topic :: Scientific/Engineering'
         'Topic :: Scientific/Engineering :: Machine Learning',
         'Topic :: Scientific/Engineering :: Machine cognition',

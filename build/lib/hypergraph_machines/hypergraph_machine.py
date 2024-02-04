@@ -1,70 +1,72 @@
+import torch
 from torch import nn
 import torch.nn.functional as F
 import numpy as np
-from hypergraph_machines.modules import Space, Morphism
-from hypergraph_machines.utils import get_graph
-from hypergraph_machines.sampler import ParamSampler
-from hypergraph_machines.custom_layers import LinearNoBias
+from hypergraph_machines.utils import Space, Morphism, Conv2d_pad
+from hypergraph_machines.utils import ACTIVATIONS, EQUIVARIANCES
+from hypergraph_machines.utils import get_graph, visualise_graph
+EQUIVARIANCES = ["translations"]
 
-
-class HgMachine(nn.Module):
-    def __init__(self, input_size, number_of_spaces=10, num_channels = 4, 
-                 kernel_size=3, limit_upsample = 3, number_of_input_spaces=1,
-                 tol = 1e-6, output_dim = 10, prune = True,
-                 out_activation=None, out_activation_params={}):
-        super(HgMachine, self).__init__()
+class HypergraphMachine(nn.Module):
+    def __init__(self, image_size, number_of_spaces, num_channels = 4,
+                 limit_image_upsample = 3, number_of_input_spaces=1,
+                 activitations = ACTIVATIONS, equivariances = EQUIVARIANCES,
+                 tol = 1e-6, classifier = None, number_of_classes = None,
+                 prune = True):
+        super(HypergraphMachine, self).__init__()
         self.number_of_spaces = number_of_spaces
-        self.input_size = input_size #(ch, h, w)
-        self.sizes = [self.input_size[1:]]
+        self.image_size = image_size #(ch, h, w)
         self.num_channels = num_channels
-        self.kernel_size = kernel_size
+        self.activations = activitations
+        self.equivariances = equivariances
         self.tol = tol
+        self.input_channels = image_size[0]
+        self.sizes = [image_size[1:]]
         self.number_of_input_spaces = number_of_input_spaces
-        self.output_dim = output_dim
-        self.limit_upsample = limit_upsample
+        self.number_of_classes = number_of_classes
+        self.limit_image_upsample = limit_image_upsample
+        self.classifier = classifier
         self.prune_it = prune
-        self.out_activation = out_activation
-        self.out_activation_params = out_activation_params
-        self.sampler = ParamSampler(self.dim)
         self.spaces = nn.ModuleList([])
         self.build_spaces()
-        
-    @property
-    def input_channels(self):
-        return self.input_size[0]
-    
-    @property
-    def dim(self):
-        return len(self.input_size[1:])
-        
-    @property
-    def out_activation(self):
-        return self._out_activation
-    
-    @out_activation.setter
-    def out_activation(self, val):
-        if val is not None:
-            self._out_activation = lambda x: val(x, **self.out_activation_params)
+
+    def resample_activation(self, out_size):
+        if out_size[0] > self.image_size[1] * self.limit_image_upsample:
+            return True
+        elif out_size[0] < self.image_size[1] / self.limit_image_upsample:
+            return True
         else:
-            self._out_activation = lambda x: x
+            return False
 
-    def resample_cond(self, out_size):
-        cond1 = out_size[0] > self.input_size[1] * self.limit_upsample
-        cond2 = out_size[0] < self.input_size[1] / self.limit_upsample
-        return cond1 or cond2
-        
     def sample_activation(self):
-        lim = True
+        res = True
 
-        while lim:
-            rand_ind = np.random.randint(len(self.sizes))
-            in_size = self.sizes[rand_ind]
-            res, in_size, out_size = self.sampler.resampler(in_size)
-            lim = self.resample_cond(out_size)
+        while res:
+            a = self.random_choice(self.activations)
+            in_size = self.random_choice(self.sizes)
+            out_size = (np.asarray(in_size) *
+                        self.get_size_coeff(a)).astype(np.int)
+            res = self.resample_activation(out_size)
 
-        act = self.sampler.activation()
-        return [act, res], in_size, out_size
+        return a, in_size, out_size
 
+    def sample_equivariance(self):
+        return self.random_choice(self.equivariances)
+
+    @staticmethod
+    def random_choice(list):
+        array = np.asarray(list)
+        ind = np.random.choice(array.shape[0])
+        return array[ind]
+
+    @staticmethod
+    def get_size_coeff(activation):
+        if activation == "maxpool":
+            return .5
+        elif activation == "upsample":
+            return 2
+        else:
+            return 1
 
     def get_input_spaces(self):
         for i in range(self.number_of_input_spaces):
@@ -75,10 +77,10 @@ class HgMachine(nn.Module):
         [setattr(s, "_depth", 0) for s in self.spaces]
 
     def get_space(self, index):
-        ar, in_size, out_size = self.sample_activation()
+        a, in_size, out_size = self.sample_activation()
         self.sizes.extend([in_size, out_size])
         space = Space(in_size, out_size, incoming_morphisms = [],
-                      activations = ar, index = index,
+                      activation = a, index = index,
                       num_channels = self.num_channels)
         self.set_incoming_morphisms(space)
         return space
@@ -93,31 +95,38 @@ class HgMachine(nn.Module):
     def build_spaces(self):
         self.get_input_spaces()
         self.set_spaces()
-        self.build_output_embedding()
+        if self.number_of_classes is not None:
+            self.build_classifiers()
         self.graph = get_graph(self)
 
-    def init_out_spaces(self, space):
+    def init_classifier(self, space):
         out_shape = ((space.num_channels,) + tuple(space.out_size))
-        return self.get_output_space(np.prod(out_shape), self.output_dim,
-                                     space.index, space.index)
+        if self.number_of_classes is not None:
+            out1 = self.number_of_classes
+            clf = self.get_output_space(np.prod(out_shape), out1, space.index,
+                                        space.index)
+        return clf
 
     def get_output_morphism(self, in_features, out_features, i, j):
-        return Morphism(in_features, out_features, equivariance=LinearNoBias,
+        return Morphism(in_features, out_features, equivariance='identity',
                         origin = i, destination = j)
 
     def get_output_space(self, in_features, out_features, i, j):
         index = j + self.number_of_spaces
-        s = Space(in_features, out_features, 1, activations=[nn.Identity()],
+        s = Space(in_features, out_features, 1, activation="relu",
                   index = index, is_output = True)
         s.add_incoming([self.get_output_morphism(in_features, out_features, i,
                                                   index)])
         self.set_depth(s)
         return s
 
-    def build_output_embedding(self):
-        in_spaces = self.number_of_input_spaces
-        out_spaces = [self.init_out_spaces(s) for s in self.spaces[in_spaces:]]
-        self.output_spaces = nn.ModuleList(out_spaces)
+    def build_classifiers(self):
+        self.output_spaces = nn.ModuleList([])
+
+        if self.number_of_classes is not None:
+            for i, s in enumerate(self.spaces[self.number_of_input_spaces:]):
+                clf = self.init_classifier(s)
+                self.output_spaces.append(clf)
 
     def set_incoming_morphisms(self, space):
         inc = []
@@ -130,8 +139,9 @@ class HgMachine(nn.Module):
                 else:
                     num_in_ch = self.num_channels
                     prunable = True
-                m = Morphism(num_in_ch, self.num_channels, kernel_size=self.kernel_size,
-                             equivariance = self.sampler.morphism(), prunable = prunable,
+                equivariance = self.sample_equivariance()
+                m = Morphism(num_in_ch, self.num_channels, 3,
+                             equivariance = equivariance, prunable = prunable,
                              origin = j, destination = space.index)
                 inc.append(m)
 
@@ -152,8 +162,6 @@ class HgMachine(nn.Module):
         setattr(space, "_depth", depth + 1)
 
     def forward(self, inputs):
-        if not isinstance(inputs, list):
-            inputs = [inputs]
         x, y = inputs, None
 
         for i, space in enumerate(self.spaces[:self.number_of_spaces]):
@@ -164,17 +172,15 @@ class HgMachine(nn.Module):
                 ind = space.index - self.number_of_input_spaces
                 if not self.output_spaces[ind].pruned:
                     if y is None:
-                        y = self.output_spaces[ind].forward(self.spaces)
+                        y =  self.output_spaces[ind].forward(self.spaces)
                     else:
                         y += self.output_spaces[ind].forward(self.spaces)
-        
-        out = self.out_activation(y)
-        
+
+        out = F.log_softmax(y, dim=1)
         if self.prune_it:
             self.set_depth_and_prune(self.spaces[self.number_of_input_spaces:])
             self.set_depth_and_prune(self.output_spaces)
-        
-        return out 
+        return out
 
     def set_depth_and_prune(self, space_list):
         for space in space_list:
@@ -194,17 +200,3 @@ class HgMachine(nn.Module):
         s1 = [s for s in self.spaces if s.index == index]
         s2 = [s for s in self.output_spaces if s.index == index]
         return (s1+s2)[0]
-
-
-class HgClassifier(HgMachine):
-    def __init__(self, input_size, **kwargs):
-        kwargs['out_activation']=F.log_softmax
-        kwargs['out_activation_params']={"dim":1}
-        super(HgClassifier, self).__init__(input_size, **kwargs)
-
-
-class HgPredictor(HgMachine):
-    def __init__(self, input_size, **kwargs):
-        kwargs['out_activation']=nn.Identity()
-        kwargs['out_activation_params']={}
-        super(HgClassifier, self).__init__(input_size, **kwargs)

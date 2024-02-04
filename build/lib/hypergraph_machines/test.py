@@ -1,4 +1,5 @@
-from hypergraph_machines.modules import Space, Morphism
+import torch
+from hypergraph_machines.meta_learning.HypergraphMachine import Space, Morphism
 
 
 def test_pruned_morphism():
@@ -13,7 +14,7 @@ def test_pruned_space():
     incoming = [Morphism(1,2,3), Morphism(1,2,3)]
     [setattr(m, "_pruned", True) for m in incoming]
     s = Space((1,1), (2,2), 3, incoming_morphisms = incoming)
-    if s.pruned:
+    if s.pruned == True:
         print("space pruning passed")
     else:
         raise ValueError("space pruning failed")
